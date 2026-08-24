@@ -14,6 +14,7 @@ router.get("/:id", async (req, res) => {
         i.name,
         i.booking_price,
         i.about_you,
+        i.instagram_profile
 
         COALESCE(
           json_agg(

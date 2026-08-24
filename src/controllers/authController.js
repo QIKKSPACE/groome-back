@@ -18,8 +18,10 @@ const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString()
 
 // helper to generate 8–10 character alphanumeric affiliate code
 const generateAffiliateCode = () => {
-  const length = Math.floor(Math.random() * 3) + 8; // 8–10 chars
-  return crypto.randomBytes(length).toString("hex").slice(0, length).toUpperCase();
+  const timestamp = Date.now().toString().slice(-6); // last 6 digits
+  const random = crypto.randomInt(1000, 9999); // 4 digits
+
+  return `GRO_${timestamp}${random}`;
 };
 
 const verifyOtp = async (req, res) => {
@@ -138,6 +140,8 @@ function normalizeIndianPhone(phone) {
 }
 
 async function signup(req, res) {
+  const client = await pool.connect();
+
   try {
     const { firebaseToken, name, email, password, parent_affiliate } = req.body;
 
@@ -162,17 +166,31 @@ async function signup(req, res) {
       });
     }
 
+    // Start transaction
+    await client.query("BEGIN");
+
     // 2️⃣ Check if user already exists
-    const existingUser = await pool.query(
+    const existingUser = await client.query(
       `SELECT * FROM users WHERE phone = $1 OR email = $2`,
       [phone, email || null]
     );
 
     if (existingUser.rows.length > 0) {
+      await client.query("ROLLBACK");
+
       const user = existingUser.rows[0];
 
-      const accessToken = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: "15m" });
-      const refreshToken = jwt.sign({ userId: user.id }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: "1y" });
+      const accessToken = jwt.sign(
+        { userId: user.id },
+        process.env.JWT_SECRET,
+        { expiresIn: "15m" }
+      );
+
+      const refreshToken = jwt.sign(
+        { userId: user.id },
+        process.env.REFRESH_TOKEN_SECRET,
+        { expiresIn: "1y" }
+      );
 
       return res.status(200).json({
         success: true,
@@ -186,46 +204,79 @@ async function signup(req, res) {
     // 3️⃣ Hash password
     const passwordHash = await hashPassword(password);
 
-    // 4️⃣ Create affiliate code
+    // 4️⃣ Generate affiliate code
     const affiliateCode = generateAffiliateCode();
 
-    // 5️⃣ Resolve parent_affiliate ID if a referral code was passed
-    let parentAffiliateId= null;
+    // 5️⃣ Resolve parent affiliate
+    let parentAffiliateId = null;
+
     if (parent_affiliate) {
-      const parentResult = await pool.query(
+      const parentResult = await client.query(
         `SELECT id FROM users WHERE affiliate_code = $1`,
         [parent_affiliate]
       );
+
       if (parentResult.rows.length > 0) {
         parentAffiliateId = parentResult.rows[0].id;
       }
     }
 
     // 6️⃣ Insert new user
-    const insertQuery = `
+    const result = await client.query(
+      `
       INSERT INTO users
-        (name, email, phone, password, role, affiliate_code, parent_affiliate, firebase_uid)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING id, name, email, phone, affiliate_code, parent_affiliate;
-    `;
+      (name, email, phone, password, role, affiliate_code, parent_affiliate, firebase_uid)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      RETURNING
+        id,
+        name,
+        email,
+        phone,
+        affiliate_code,
+        parent_affiliate,
+        affiliate_count;
+      `,
+      [
+        name || "User",
+        email || null,
+        phone,
+        passwordHash,
+        "customer",
+        affiliateCode,
+        parentAffiliateId,
+        firebaseUid,
+      ]
+    );
 
-    const values = [
-      name || "User",
-      email || null,
-      phone,
-      passwordHash,
-      "customer",
-      affiliateCode,
-      parentAffiliateId, // store parent user id here
-      firebaseUid,
-    ];
-
-    const result = await pool.query(insertQuery, values);
     const newUser = result.rows[0];
 
-    // 7️⃣ Generate JWTs
-    const accessToken = jwt.sign({ userId: newUser.id }, process.env.JWT_SECRET, { expiresIn: "15m" });
-    const refreshToken = jwt.sign({ userId: newUser.id }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: "1y" });
+    // 7️⃣ Increment parent's affiliate count
+    if (parentAffiliateId) {
+      await client.query(
+        `
+        UPDATE users
+        SET affiliate_count = affiliate_count + 1
+        WHERE id = $1
+        `,
+        [parentAffiliateId]
+      );
+    }
+
+    // Commit transaction
+    await client.query("COMMIT");
+
+    // 8️⃣ Generate tokens
+    const accessToken = jwt.sign(
+      { userId: newUser.id },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    const refreshToken = jwt.sign(
+      { userId: newUser.id },
+      process.env.REFRESH_TOKEN_SECRET,
+      { expiresIn: "1y" }
+    );
 
     return res.status(201).json({
       success: true,
@@ -236,11 +287,16 @@ async function signup(req, res) {
     });
 
   } catch (err) {
+    await client.query("ROLLBACK");
+
     console.error("Signup error:", err);
+
     return res.status(401).json({
       success: false,
       message: "Invalid or expired Firebase token",
     });
+  } finally {
+    client.release();
   }
 }
 
@@ -269,10 +325,11 @@ async function login(req, res) {
       { expiresIn: "1y" }
     );
 
-    await saveRefreshToken(user.id, refreshToken);
+    await saveRefreshToken(user.id, refreshToken,"USER");
 
     return res.json({ 
-      user: { id: user.id, name: user.name, email: user.email },
+      user: { id: user.id, name: user.name, email: user.email,  is_affiliate: user.is_affiliate,
+    affiliate_code: user.affiliate_code, },
       accessToken,
       refreshToken,
     });
@@ -306,8 +363,8 @@ async function refresh(req, res) {
       { expiresIn: "7d" }
     );
 
-    await deleteRefreshToken(refreshToken);
-    await saveRefreshToken(user.id, newRefreshToken);
+    await deleteRefreshToken(refreshToken,"USER");
+    await saveRefreshToken(user.id, newRefreshToken,"USER");
 
     return res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
   } catch (err) {
@@ -320,7 +377,7 @@ async function refresh(req, res) {
 async function logout(req, res) {
   try {
     const { refreshToken } = req.body;
-    await deleteRefreshToken(refreshToken);
+    await deleteRefreshToken(refreshToken,"USER");
     return res.json({ success: true });
   } catch (err) {
     console.error("logout error:", err);

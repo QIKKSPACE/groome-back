@@ -13,28 +13,39 @@ async function calculateSlots(req, res) {
     if (!duration || duration <= 0) return res.status(400).json({ error: "duration required" });
 
     // 1) Fetch vendor settings
-    const vendorRes = await pool.query(
-      `SELECT open_time, close_time, weekly_off_days, employee_count, timezone
-       FROM vendor_settings WHERE vendor_id = $1`,
-      [vendorId]
-    );
+  const vendorRes = await pool.query(
+  `SELECT
+      open_time,
+      close_time,
+      weekly_off_days,
+      employee_count,
+      timezone,
+      slot_duration
+   FROM vendor_settings
+   WHERE vendor_id = $1`,
+  [vendorId]
+);
     if (vendorRes.rowCount === 0) return res.status(404).json({ error: "Vendor settings not found" });
 
     const vs = vendorRes.rows[0];
-    const vendorZone = vs.timezone || "Asia/Kolkata";
+   const vendorZone = "Asia/Kolkata";
     const employeeCount = Number(vs.employee_count) || 1;
     const weeklyOff = vs.weekly_off_days || [];
-
-    console.log("Vendor settings:", vs);
 
     // 2) Parse requested date
     const dt = DateTime.fromISO(date, { zone: vendorZone });
     if (!dt.isValid) return res.status(400).json({ error: "invalid date" });
 
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    if (weeklyOff.includes(days[dt.weekday % 7])) {
+    // Luxon: Mon=1 ... Sat=6, Sun=7 -> Convert to JS-style: Sun=0 ... Sat=6
+    const weekdayNumber = dt.weekday % 7;
+
+    if (weeklyOff.includes(weekdayNumber)) {
       console.log("Vendor closed due to weekly off");
-      return res.json({ closed: true, reason: "weekly_off", slots: [] });
+      return res.json({
+        closed: true,
+        reason: "weekly_off",
+        slots: []
+      });
     }
 
     // 3) Check closed_days table
@@ -54,15 +65,23 @@ async function calculateSlots(req, res) {
     let openDT = dt.set({ hour: openH, minute: openM, second: 0, millisecond: 0 });
     const closeDT = dt.set({ hour: closeH, minute: closeM, second: 0, millisecond: 0 });
 
-    console.log("Open time:", openDT.toISO());
-    console.log("Close time:", closeDT.toISO());
-
     const now = DateTime.now().setZone(vendorZone);
     if (dt.hasSame(now, "day") && now > openDT) {
       openDT = now.plus({ minutes: 1 }).startOf("minute");
     }
 
     if (openDT >= closeDT) return res.json({ closed: true, reason: "invalid_hours", slots: [] });
+
+    // Fetch Blocked Slots
+    const blockedRes = await pool.query(
+      `SELECT start_time, "end_time"
+       FROM blocked_slots
+       WHERE vendor_id = $1
+       AND blocked_date = $2`,
+      [vendorId, date]
+    );
+
+    console.log("Blocked slots fetched:", blockedRes.rows);
 
     // 5) Fetch bookings
     const bookingRes = await pool.query(
@@ -72,12 +91,12 @@ async function calculateSlots(req, res) {
     );
 
     console.log("Bookings fetched:", bookingRes.rows.length);
+    
 
     // 6) Parse bookings
     const bookings = bookingRes.rows.map(b => {
       const start = DateTime.fromJSDate(b.start_ts).setZone(vendorZone, { keepLocalTime: false });
       const end = DateTime.fromJSDate(b.end_ts).setZone(vendorZone, { keepLocalTime: false });
-      console.log("Parsed booking:", start.toISO(), "->", end.toISO(), "Employees:", b.employee_slot);
       return {
         start,
         end,
@@ -85,8 +104,31 @@ async function calculateSlots(req, res) {
       };
     });
 
+    // Parse blocked slots
+    const blockedSlots = blockedRes.rows.map(b => {
+  const [startH, startM] = b.start_time.split(":").map(Number);
+  const [endH, endM] = b.end_time.split(":").map(Number);
+
+  return {
+    start: dt.set({
+      hour: startH,
+      minute: startM,
+      second: 0,
+      millisecond: 0
+    }),
+    end: dt.set({
+      hour: endH,
+      minute: endM,
+      second: 0,
+      millisecond: 0
+    })
+  };
+});
+
+ 
+
     // 7) Generate slots
-    const STEP = 30; // minutes between slots
+   const STEP = Number(vs.slot_duration) || 30;
     const slots = [];
     let cursor = openDT;
 
@@ -94,20 +136,31 @@ async function calculateSlots(req, res) {
       const slotStart = cursor;
       const slotEnd = cursor.plus({ minutes: duration });
 
-      // Find overlapping bookings
-      const overlapping = bookings.filter(b => b.start < slotEnd && b.end > slotStart);
-      overlapping.forEach(b => console.log("Overlap detected:", b.start.toISO(), "-", b.end.toISO(), "with slot", slotStart.toISO(), "-", slotEnd.toISO()));
+      // Check if slot overlaps with ANY blocked slot time frame
+      const isBlocked = blockedSlots.some(b => b.start < slotEnd && b.end > slotStart);
 
-      // Sum employees used
-      let employeesUsed = overlapping.reduce((sum, b) => sum + b.emp, 0);
-      employeesUsed = Math.min(employeesUsed, employeeCount); // cap at employee count
+      let employeesUsed = 0;
+      let isAvailable = true;
 
-      console.log("Slot:", slotStart.toFormat("HH:mm"), "Employees used:", employeesUsed);
+      if (isBlocked) {
+        console.log(`Slot ${slotStart.toFormat("HH:mm")} is within a blocked time window.`);
+        employeesUsed = employeeCount; // Max out capacity so no one can book
+        isAvailable = false;
+      } else {
+        // Find overlapping bookings if not blocked
+        const overlapping = bookings.filter(b => b.start < slotEnd && b.end > slotStart);
+        
+        employeesUsed = overlapping.reduce((sum, b) => sum + b.emp, 0);
+        employeesUsed = Math.min(employeesUsed, employeeCount); // cap at max employee count
+        isAvailable = employeesUsed < employeeCount;
+      }
+
+      console.log("Slot:", slotStart.toFormat("HH:mm"), "Employees used:", employeesUsed, "Available:", isAvailable);
 
       slots.push({
         time: slotStart.toFormat("HH:mm"),
         employees_used: employeesUsed,
-        available: employeesUsed < employeeCount,
+        available: isAvailable,
         capacity: employeeCount
       });
 

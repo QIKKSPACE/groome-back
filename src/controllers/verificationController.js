@@ -10,12 +10,14 @@ const createVendor = async (req, res) => {
   try {
     let {
       service_ids, // arrives as JSON string in multipart/form-data
+      category_ids,
       address,
       zip_code,
       city,
       state,
       business_name,
       gst_number,
+      shop_act_number, // 👈 ADD THIS
       map_address,
       latitude,
       longitude,
@@ -24,9 +26,13 @@ const createVendor = async (req, res) => {
 
     // 🔹 Convert stringified JSON -> array
     try {
+      
       if (typeof service_ids === "string") {
         service_ids = JSON.parse(service_ids);
       }
+       if (typeof category_ids === "string") {
+    category_ids = JSON.parse(category_ids);
+  }
     } catch (e) {
       return res.status(400).json({ error: "Invalid service_ids format" });
     }
@@ -58,9 +64,8 @@ const createVendor = async (req, res) => {
     }
 
     // 🔹 Handle file uploads (from Multer)
-    const companyDoc = req.files?.companyDoc?.[0] || null;
-    const gstDoc = req.files?.gstDoc?.[0] || null;
-
+const companyDoc = req.files?.company_doc?.[0] || null;
+const gstDoc = req.files?.gst_doc?.[0] || null;
     await client.query("BEGIN");
 
     // 1️⃣ Insert into vendors table
@@ -69,10 +74,10 @@ const createVendor = async (req, res) => {
          address, pincode, city, state,
          user_id, business_name,
          gst_number, company_doc, gst_doc,
-         map_address, place_id, latitude, longitude,
+         shop_act_number, map_address, place_id, latitude, longitude,
          verified
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,false)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,false)
        RETURNING *;`,
       [
         address,
@@ -82,8 +87,9 @@ const createVendor = async (req, res) => {
         userId,
         business_name,
         gst_number || null,
-        companyDoc ? companyDoc.path : null,
-        gstDoc ? gstDoc.path : null,
+        companyDoc ? `/uploads/${companyDoc.filename}` : null,
+gstDoc ? `/uploads/${gstDoc.filename}` : null,
+        shop_act_number || null,
         map_address || null,
         place_id || null,
         latitude || null,
@@ -99,7 +105,16 @@ const createVendor = async (req, res) => {
       service_ids.map((_, idx) => `($1, $${idx + 2})`).join(", ");
 
     await client.query(insertServicesQuery, [vendorId, ...service_ids]);
+   if (category_ids.length > 0) {
+  const insertCategoriesQuery =
+    `INSERT INTO vendor_product_categories (vendor_id, category_id) VALUES ` +
+    category_ids.map((_, idx) => `($1, $${idx + 2})`).join(", ");
 
+  await client.query(insertCategoriesQuery, [
+    vendorId,
+    ...category_ids,
+  ]);
+}
     await client.query("COMMIT");
 
     res.status(201).json({
@@ -131,6 +146,7 @@ const createMall = async (req, res) => {
       longitude,
       place_id,
       company_id,
+        category_ids,
     } = req.body;
 
     // 🔹 Handle file upload (from Multer)
@@ -154,6 +170,19 @@ const createMall = async (req, res) => {
         });
       }
     }
+    try {
+  if (typeof category_ids === "string") {
+    category_ids = JSON.parse(category_ids);
+  }
+} catch (e) {
+  return res.status(400).json({
+    error: "Invalid category_ids format",
+  });
+}
+
+if (!Array.isArray(category_ids)) {
+  category_ids = [];
+}
 
     await client.query("BEGIN");
 
@@ -174,7 +203,7 @@ const createMall = async (req, res) => {
         state,
         userId,
         shop_name || "new_business",
-        companyDoc ? companyDoc.path : null,
+          companyDoc ? `/uploads/${companyDoc.filename}` : null,
         map_address || null,
         place_id || null,
         latitude || null,
@@ -182,7 +211,17 @@ const createMall = async (req, res) => {
         company_id || null,
       ]
     );
+    const mallId = mallResult.rows[0].id;
+if (category_ids.length > 0) {
+  const insertCategoriesQuery =
+    `INSERT INTO mall_product_categories (mall_id, category_id) VALUES ` +
+    category_ids.map((_, idx) => `($1, $${idx + 2})`).join(", ");
 
+  await client.query(insertCategoriesQuery, [
+    mallId,
+    ...category_ids,
+  ]);
+}
     await client.query("COMMIT");
 
     res.status(201).json({
@@ -212,6 +251,7 @@ const createManufacturer = async (req, res) => {
       city,
       state,
       manufacturer_number,
+     
     } = req.body;
 
     // 🔹 Parse product_ids (categories)
@@ -250,7 +290,7 @@ const createManufacturer = async (req, res) => {
     }
 
     // 🔹 Handle optional file uploads (Multer)
-    const companyDoc = req.files?.companyDoc?.[0] || null;
+    const companyDoc = req.files?.company_doc?.[0] || null;
 
     await client.query("BEGIN");
 
@@ -270,7 +310,7 @@ const createManufacturer = async (req, res) => {
         state,
         userId,
         firm_name, // maps to business_name
-        companyDoc ? companyDoc.path : null,
+          companyDoc ? `/uploads/${companyDoc.filename}` : null,
         manufacturer_number || null,
       ]
     );
@@ -359,7 +399,7 @@ const createDeliveryPartner = async (req, res) => {
       city,
       state,
       dl_number || null,
-      dlImage ? dlImage.path : null,
+      dlImage ? `/uploads/${dlImage.filename}` : null,
       userId,
     ];
 
@@ -467,11 +507,12 @@ const createInfluencer = async (req, res) => {
       name,
       instagram_profile,
       state,
-      content_type,
+      content_types, // arrives as JSON string in multipart/form-data
       languages, // comes as JSON string from form-data
       about_you,
       consent,
       show_on_frontend,
+      city
     } = req.body;
 
     // 🔹 Convert languages string -> array
@@ -482,9 +523,17 @@ const createInfluencer = async (req, res) => {
     } catch (e) {
       return res.status(400).json({ error: "Invalid languages format" });
     }
-
+try {
+  if (typeof content_types === "string") {
+    content_types = JSON.parse(content_types);
+  }
+} catch (e) {
+  return res.status(400).json({
+    error: "Invalid content types format",
+  });
+}
     // 🔹 Validate required fields
-    if (!name || !instagram_profile || !state || !content_type) {
+    if (!name || !instagram_profile || !state || !content_types) {
       return res
         .status(400)
         .json({ error: "Name, Instagram, State, and Content Type are required" });
@@ -529,21 +578,23 @@ const createInfluencer = async (req, res) => {
     // 1️⃣ Insert influencer
     const influencerResult = await client.query(
       `INSERT INTO influencers (
-        user_id, name, instagram_profile, state, content_type,
-        languages, profile_picture_url, about_you, consent, show_on_frontend
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        user_id, name, instagram_profile, state, content_types,
+        languages, profile_picture_url, about_you, consent, show_on_frontend, city
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
       RETURNING *;`,
       [
         userId,
         name,
         instagram_profile,
         state,
-        content_type,
+        content_types,
         languages,
-        profilePic ? profilePic.path : null,
+        profilePic ? `/uploads/${profilePic.filename}` : null,
+
         about_you || null,
         consent === "true" || consent === true,
         show_on_frontend === "true" || show_on_frontend === true,
+        city || null
       ]
     );
 

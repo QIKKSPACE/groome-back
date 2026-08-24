@@ -12,6 +12,10 @@ const pool = require("../config/db");
 
 // GET /auth/check-username?username=...
 router.get("/allService", ctrl.getAllServicesWithImages);
+router.get(
+  "/services/category/:category",
+  ctrl.getAllServicesWithImagesByCategory
+);
 router.get("/services/:id", ctrl.getServiceById);
 router.get("/calculateSlot/:serviceId", ctrl1.calculateSlots);
 router.post("/bookings",authorization, ctrl2.createBooking);
@@ -60,7 +64,56 @@ router.get("/all-user-under-affiliate/:affiliateCode", async (req, res) => {
   }
 });
 
+router.get("/products/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
 
+    const productResult = await pool.query(
+      `
+      SELECT
+        p.*,
+        c.name AS category_name,
+        sc.name AS sub_category_name
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN categories sc ON sc.id = p.sub_category_id
+      WHERE p.id = $1
+      `,
+      [id]
+    );
+
+    if (productResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    const imagesResult = await pool.query(
+      `
+      SELECT *
+      FROM product_images
+      WHERE product_id = $1
+      ORDER BY created_at;
+      `,
+      [id]
+    );
+
+    res.json({
+      success: true,
+      product: {
+        ...productResult.rows[0],
+        images: imagesResult.rows,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
 
 
 module.exports = router;

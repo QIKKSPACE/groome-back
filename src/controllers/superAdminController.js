@@ -55,10 +55,20 @@ const getCategories = async (req, res) => {
 
 // POST /categories
 const createCategory = async (req, res) => {
-  const { name, description, parent_id, sort_order, commission } = req.body;
- console.log(req.body)
-  // ✅ File path from multer      
-  const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+  const {
+    name,
+    description,
+    parent_id,
+    sort_order,
+    commission,
+    platform_commission = 0,
+  } = req.body;
+
+  console.log(req.body);
+
+  const imageUrl = req.file
+    ? `/uploads/${req.file.filename}`
+    : null;
 
   if (!name || !sort_order || commission == null) {
     return res.status(400).json({
@@ -69,16 +79,35 @@ const createCategory = async (req, res) => {
   try {
     const result = await pool.query(
       `INSERT INTO categories
-       (name, description, parent_id, sort_order, commission, image_url, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, true)
-       RETURNING *`,
-      [name, description || null, parent_id || null, sort_order, commission, imageUrl]
+      (
+        name,
+        description,
+        parent_id,
+        sort_order,
+        commission,
+        platform_commission,
+        image_url,
+        is_active
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+      RETURNING *`,
+      [
+        name,
+        description || null,
+        parent_id || null,
+        sort_order,
+        commission,
+        platform_commission || 0,
+        imageUrl,
+      ]
     );
 
     return res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error("❌ Error creating category:", error);
-    return res.status(500).json({ message: "Failed to create category" });
+    return res.status(500).json({
+      message: "Failed to create category",
+    });
   }
 };
 
@@ -87,37 +116,60 @@ const createCategory = async (req, res) => {
 // PUT /categories/:id
 const updateCategory = async (req, res) => {
   const { id } = req.params;
-  const { name, description, parent_id, sort_order, commission } = req.body;
-  
-  const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+
+  const {
+    name,
+    description,
+    parent_id,
+    sort_order,
+    commission,
+    platform_commission,
+  } = req.body;
+
+  const imageUrl = req.file
+    ? `/uploads/${req.file.filename}`
+    : null;
 
   try {
     const result = await pool.query(
       `UPDATE categories
-       SET 
+       SET
          name = COALESCE($1, name),
          description = COALESCE($2, description),
          parent_id = COALESCE($3, parent_id),
          sort_order = COALESCE($4, sort_order),
          commission = COALESCE($5, commission),
-         image_url = COALESCE($6, image_url),
+         platform_commission = COALESCE($6, platform_commission),
+         image_url = COALESCE($7, image_url),
          updated_at = NOW()
-       WHERE id = $7
+       WHERE id = $8
        RETURNING *`,
-      [name || null, description || null, parent_id || null, sort_order || null, commission || null, imageUrl, id]
+      [
+        name ?? null,
+        description ?? null,
+        parent_id ?? null,
+        sort_order ?? null,
+        commission ?? null,
+        platform_commission ?? null,
+        imageUrl,
+        id,
+      ]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Category not found" });
+      return res.status(404).json({
+        message: "Category not found",
+      });
     }
 
     return res.json(result.rows[0]);
   } catch (error) {
     console.error("❌ Error updating category:", error);
-    return res.status(500).json({ message: "Failed to update category" });
+    return res.status(500).json({
+      message: "Failed to update category",
+    });
   }
 };
-
 
 // PATCH /categories/:id/status
 const toggleCategoryStatus = async (req, res) => {
@@ -173,7 +225,13 @@ const getServices = async (req, res) => {
 
 // POST /services
 const createService = async (req, res) => {
-  const { name, description, commission } = req.body;
+  const {
+    name,
+    description,
+    commission,
+    affiliate_commission = 0,
+  } = req.body;
+
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
 
   if (!name || commission == null) {
@@ -184,10 +242,23 @@ const createService = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO services (name, description, commission, image_url, is_active)
-       VALUES ($1, $2, $3, $4, true)
+      `INSERT INTO services (
+          name,
+          description,
+          commission,
+          affiliate_commission,
+          image_url,
+          is_active
+       )
+       VALUES ($1, $2, $3, $4, $5, true)
        RETURNING *`,
-      [name, description || null, commission, imageUrl]
+      [
+        name,
+        description || null,
+        commission,
+        affiliate_commission,
+        imageUrl,
+      ]
     );
 
     return res.status(201).json(result.rows[0]);
@@ -201,31 +272,62 @@ const createService = async (req, res) => {
 // PUT /services/:id
 const updateService = async (req, res) => {
   const { id } = req.params;
-  const { name, description, commission } = req.body;
+
+  const {
+    name,
+    description,
+    commission,
+    affiliate_commission,
+  } = req.body;
+
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
 
   try {
-    // 🔹 If an image was uploaded, include it in the update
     let query;
     let values;
 
     if (imageUrl) {
       query = `
         UPDATE services
-        SET name=$1, description=$2, commission=$3, image_url=$4, updated_at=NOW()
-        WHERE id=$5
+        SET
+          name = $1,
+          description = $2,
+          commission = $3,
+          affiliate_commission = $4,
+          image_url = $5,
+          updated_at = NOW()
+        WHERE id = $6
         RETURNING *;
       `;
-      values = [name, description || null, commission, imageUrl, id];
+
+      values = [
+        name,
+        description || null,
+        commission,
+        affiliate_commission,
+        imageUrl,
+        id,
+      ];
     } else {
-      // 🔹 Otherwise, leave image_url unchanged
       query = `
         UPDATE services
-        SET name=$1, description=$2, commission=$3, updated_at=NOW()
-        WHERE id=$4
+        SET
+          name = $1,
+          description = $2,
+          commission = $3,
+          affiliate_commission = $4,
+          updated_at = NOW()
+        WHERE id = $5
         RETURNING *;
       `;
-      values = [name, description || null, commission, id];
+
+      values = [
+        name,
+        description || null,
+        commission,
+        affiliate_commission,
+        id,
+      ];
     }
 
     const result = await pool.query(query, values);
@@ -240,7 +342,6 @@ const updateService = async (req, res) => {
     return res.status(500).json({ message: "Failed to update service" });
   }
 };
-
 
 // PATCH /services/:id/status
 const toggleServiceStatus = async (req, res) => {
@@ -305,8 +406,14 @@ const getBanners = async (req, res) => {
 };
 
 // POST /banners
+// POST /banners
 const createBanner = async (req, res) => {
-  const { title, description, position } = req.body;
+  const {
+    title,
+    description,
+    position,
+    linkUrl,
+  } = req.body;
 
   try {
     let image_url = null;
@@ -314,30 +421,56 @@ const createBanner = async (req, res) => {
     let file_type = null;
 
     if (req.file) {
-      image_url = `/uploads/${req.file.filename}`; // ✅ use image_url for the uploaded image
+      image_url = `/uploads/${req.file.filename}`;
       file_name = req.file.originalname;
       file_type = req.file.mimetype;
     }
 
     const result = await pool.query(
-      `INSERT INTO banners
-       (title, description, image_url, file_name, file_type, position,is_active)
-       VALUES ($1, $2, $3, $4, $5, $6,true)
-       RETURNING *`,
-      [title, description, image_url, file_name, file_type, position]
+      `INSERT INTO banners (
+        title,
+        description,
+        image_url,
+        file_name,
+        file_type,
+        position,
+        link_url,
+        is_active
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+      RETURNING *`,
+      [
+        title,
+        description,
+        image_url,
+        file_name,
+        file_type,
+        position,
+        linkUrl || null,
+      ]
     );
 
     return res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: "Failed to create banner" });
+    console.error("Create banner error:", error);
+
+    return res.status(500).json({
+      message: "Failed to create banner",
+      error: error.message,
+    });
   }
 };
-
 // PUT /banners/:id
 const updateBanner = async (req, res) => {
   const { id } = req.params;
-  const { title, description, position, is_active } = req.body;
+
+  const {
+    title,
+    description,
+    position,
+    is_active,
+    linkUrl,
+  } = req.body;
 
   try {
     let image_url = null;
@@ -345,38 +478,54 @@ const updateBanner = async (req, res) => {
     let file_type = null;
 
     if (req.file) {
-      image_url = `/uploads/${req.file.filename}`; // ✅ new uploaded image
+      image_url = `/uploads/${req.file.filename}`;
       file_name = req.file.originalname;
       file_type = req.file.mimetype;
     }
 
     const result = await pool.query(
       `UPDATE banners
-       SET title = COALESCE($1, title),
-           description = COALESCE($2, description),
-           position = COALESCE($3, position),
-           is_active = COALESCE($4, is_active),
-           image_url = COALESCE($5, image_url),
-           file_name = COALESCE($6, file_name),
-           file_type = COALESCE($7, file_type),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $8
+       SET
+         title = COALESCE($1, title),
+         description = COALESCE($2, description),
+         position = COALESCE($3, position),
+         is_active = COALESCE($4, is_active),
+         image_url = COALESCE($5, image_url),
+         file_name = COALESCE($6, file_name),
+         file_type = COALESCE($7, file_type),
+         link_url = COALESCE($8, link_url),
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = $9
        RETURNING *`,
-      [title, description, position, is_active, image_url, file_name, file_type, id]
+      [
+        title,
+        description,
+        position,
+        is_active,
+        image_url,
+        file_name,
+        file_type,
+        linkUrl,
+        id,
+      ]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Banner not found" });
+      return res.status(404).json({
+        message: "Banner not found",
+      });
     }
 
     return res.json(result.rows[0]);
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: "Failed to update banner" });
+    console.error("Update banner error:", error);
+
+    return res.status(500).json({
+      message: "Failed to update banner",
+      error: error.message,
+    });
   }
 };
-
-
 // PATCH /banners/:id/status
 const toggleBannerStatus = async (req, res) => {
   const { id } = req.params;
@@ -678,33 +827,139 @@ const createVendor = async (req, res) => {
 
 // /api/lookupLatLng.js  (Next.js API route or Express controller)
  const lookupLatLng = async (req, res) => {
-  try {
-    const { pincode } = req.query;
+try {
+const { pincode } = req.query;
 
-    if (!pincode) {
-      return res.status(400).json({ error: "Pincode is required" });
-    }
+if (!pincode) {
+  return res.status(400).json({
+    error: "Pincode is required",
+  });
+}
 
-    const apiKey = process.env.GOOGLE_API_KEY;
-    const apiUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
-      pincode
-    )}&region=in&key=${apiKey}`;
+// Validate Indian pincode
+if (!/^\d{6}$/.test(pincode)) {
+  return res.status(400).json({
+    error: "Please enter a valid 6-digit pincode",
+  });
+}
 
-    const response = await fetch(apiUrl);
-    const data = await response.json();
+const apiKey = process.env.GOOGLE_API_KEY;
 
-    if (data.status === "OK" && data.results.length > 0) {
-      const { lat, lng } = data.results[0].geometry.location;
-      const formattedAddress = data.results[0].formatted_address;
+if (!apiKey) {
+  return res.status(500).json({
+    error: "Google API key is not configured",
+  });
+}
 
-      return res.json({ lat, lng, formattedAddress });
-    } else {
-      return res.status(404).json({ error: "No results found" });
-    }
-  } catch (error) {
-    console.error("Error fetching coordinates:", error);
-    return res.status(500).json({ error: "Server error" });
-  }
+const apiUrl =
+  `https://maps.googleapis.com/maps/api/geocode/json` +
+  `?address=${encodeURIComponent(`${pincode}, India`)}` +
+  `&region=in` +
+  `&key=${apiKey}`;
+
+const response = await fetch(apiUrl);
+const data = await response.json();
+
+if (data.status !== "OK" || !data.results?.length) {
+  return res.status(404).json({
+    error: "No location found for this pincode",
+    googleStatus: data.status,
+  });
+}
+
+const result = data.results[0];
+
+const { lat, lng } = result.geometry.location;
+
+// Get a component using one exact Google address type
+const getComponentByType = (type) => {
+  const component = result.address_components.find((item) =>
+    item.types.includes(type)
+  );
+
+  return component?.long_name || null;
+};
+
+/*
+  IMPORTANT:
+
+  For Indian pincodes, Google may return:
+
+  locality:
+  Kabir Chak
+
+  administrative_area_level_2:
+  Darbhanga
+
+  We prioritize administrative_area_level_2 because
+  it is the larger district/city area needed here.
+*/
+
+const city =
+  getComponentByType("administrative_area_level_3") ||
+  getComponentByType("postal_town") ||
+  getComponentByType("locality");
+
+const state = getComponentByType(
+  "administrative_area_level_1"
+);
+
+const country = getComponentByType("country");
+
+const returnedPincode = getComponentByType(
+  "postal_code"
+);
+
+// Keep locality separately if needed
+const locality = getComponentByType("locality");
+
+console.log("Location details:", {
+  pincode: returnedPincode || pincode,
+  latitude: lat,
+  longitude: lng,
+  locality,
+  city,
+  state,
+  country,
+  formattedAddress: result.formatted_address,
+});
+
+return res.status(200).json({
+  success: true,
+
+  pincode: returnedPincode || pincode,
+
+   lat,
+   lng,
+
+  // Kabir Chak
+  locality,
+
+  // Darbhanga
+  city,
+
+  // Bihar
+  state,
+
+  country,
+
+  formattedAddress: result.formatted_address,
+});
+
+
+} catch (error) {
+console.error(
+"Error fetching coordinates:",
+error
+);
+
+
+return res.status(500).json({
+  error: "Server error while fetching location",
+});
+
+
+}
 };
 
 
@@ -1086,7 +1341,7 @@ const getUnverifiedInfluencers = async (req, res) => {
         i.name,
         i.instagram_profile,
         i.state,
-        i.content_type,
+        i.content_types,
         i.languages,
         i.profile_picture_url,
         i.about_you,
@@ -1184,7 +1439,7 @@ const getVerifiedInfluencers = async (req, res) => {
         i.name,
         i.instagram_profile,
         i.state,
-        i.content_type,
+        i.content_types,
         i.languages,
         i.profile_picture_url,
         i.about_you,
@@ -1210,6 +1465,343 @@ const getVerifiedInfluencers = async (req, res) => {
   } catch (err) {
     console.error("Error fetching unverified influencers:", err);
     res.status(500).json({ error: "Server error" });
+  }
+  
+};
+const getManufacturers = async (req, res) => {
+  try {
+    const { search, filterStatus } = req.query;
+
+    let query = `
+      SELECT 
+        m.id, 
+        m.business_name, 
+        m.address, 
+        m.zip_code, 
+        m.city, 
+        m.state, 
+        m.company_doc, 
+        m.company_id, 
+        m.verified,
+        u.name AS owner_name,
+        u.email,
+        u.phone,
+        m.user_id,
+        COALESCE(
+          ARRAY_AGG(DISTINCT c.name) 
+          FILTER (WHERE c.id IS NOT NULL), 
+          '{}'
+        ) AS categories,
+        COUNT(DISTINCT p.id) FILTER (
+          WHERE (p.selling_price IS NULL OR p.selling_price = 0)
+            AND p.seller_type = 'MANUFACTURER'
+        ) AS null_price_product_count
+      FROM manufacturers m
+      JOIN users u ON u.id = m.user_id
+      LEFT JOIN manufacturer_categories mc ON mc.manufacturer_id = m.id
+      LEFT JOIN categories c ON c.id = mc.category_id
+      LEFT JOIN products p ON p.user_id = m.user_id
+      WHERE 1=1
+    `;
+
+    const values = [];
+
+    if (filterStatus === "verified") {
+      query += ` AND m.verified = true`;
+    } else if (filterStatus === "unverified") {
+      query += ` AND m.verified = false`;
+    }
+
+    if (search) {
+      values.push(`%${search}%`);
+      query += ` AND (
+        m.business_name ILIKE $${values.length} OR
+        u.name ILIKE $${values.length} OR
+        u.email ILIKE $${values.length} OR
+        u.phone ILIKE $${values.length} OR
+        m.city ILIKE $${values.length} OR
+        m.state ILIKE $${values.length} OR
+        m.zip_code ILIKE $${values.length}
+      )`;
+    }
+
+    query += `
+      GROUP BY m.id, u.name, u.email, u.phone
+      ORDER BY m.verified DESC, m.business_name ASC;
+    `;
+
+    const result = await pool.query(query, values);
+
+    res.status(200).json({
+      success: true,
+      manufacturers: result.rows,
+    });
+  } catch (err) {
+    console.error("Get manufacturers error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+const getManufacturerById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `
+      SELECT 
+        m.*,
+        u.id AS user_id,
+        u.name AS owner_name,
+        u.email,
+        u.phone,
+        COALESCE(
+          ARRAY_AGG(DISTINCT c.name) 
+          FILTER (WHERE c.id IS NOT NULL), 
+          '{}'
+        ) AS categories
+      FROM manufacturers m
+      JOIN users u ON u.id = m.user_id
+      LEFT JOIN manufacturer_categories mc ON mc.manufacturer_id = m.id
+      LEFT JOIN categories c ON c.id = mc.category_id
+      WHERE m.id = $1
+      GROUP BY m.id, u.id, u.name, u.email, u.phone;
+      `,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Manufacturer not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      manufacturer: result.rows[0],
+    });
+  } catch (err) {
+    console.error("Get manufacturer by ID error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+const verifyManufacturer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { verified } = req.body;
+
+    if (typeof verified !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payload. 'verified' must be a boolean (true or false).",
+      });
+    }
+
+    const result = await pool.query(
+      `
+      WITH updated AS (
+        UPDATE manufacturers
+        SET verified = $1,
+            updated_at = NOW()
+        WHERE id = $2
+        RETURNING *
+      )
+      SELECT
+        m.*,
+        u.id AS user_id,
+        u.name AS owner_name,
+        u.email,
+        u.phone,
+        COALESCE(
+          ARRAY_AGG(DISTINCT c.name)
+          FILTER (WHERE c.id IS NOT NULL),
+          '{}'
+        ) AS categories
+      FROM updated m
+      JOIN users u ON u.id = m.user_id
+      LEFT JOIN manufacturer_categories mc
+        ON mc.manufacturer_id = m.id
+      LEFT JOIN categories c
+        ON c.id = mc.category_id
+      GROUP BY
+        m.id,
+        m.user_id,
+        m.business_name,
+        m.company_id,
+        m.address,
+        m.city,
+        m.state,
+        m.zip_code,
+        m.company_doc,
+        m.profile_image,
+        m.verified,
+        m.created_at,
+        m.updated_at,
+        u.id,
+        u.name,
+        u.email,
+        u.phone;
+      `,
+      [verified, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Manufacturer not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Manufacturer ${
+        verified ? "verified" : "unverified"
+      } successfully`,
+      manufacturer: result.rows[0],
+    });
+  } catch (err) {
+    console.error("Verify manufacturer error:", err);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+const getManufacturerProducts = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log("Requested userId:", userId, "Type:", typeof userId);
+    const query = `
+      SELECT 
+        p.id,
+        p.user_id,
+        p.category_id,
+        p.sub_category_id,
+        p.name,
+        p.description,
+        p.price,
+        p.selling_price,
+        p.stock_quantity,
+        p.status,
+        p.quality_tier,
+        p.seller_type,
+        p.product_code,
+        p.brand_name,
+        p.available_sizes,
+        p.available_colors,
+        p.weight,
+        p.dimensions,
+        p.specifications,
+        p.created_at,
+        p.updated_at,
+        p.moq,
+        p.moq_price,
+        c.name AS category_name,
+        COALESCE(
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'id', pi.id,
+              'image_url', pi.image_url,
+              'is_primary', pi.is_primary
+            )
+          ) FILTER (WHERE pi.id IS NOT NULL),
+          '[]'
+        ) AS images
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN product_images pi ON pi.product_id = p.id
+      WHERE p.user_id = $1 
+        AND p.seller_type = 'MANUFACTURER'
+      GROUP BY p.id, c.name
+      ORDER BY p.created_at DESC;
+    `;
+
+    const result = await pool.query(query, [userId]);
+
+    res.status(200).json({
+      success: true,
+      count: result.rows.length,
+      products: result.rows,
+    });
+  } catch (err) {
+    console.error("Get manufacturer products error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error while fetching products",
+    });
+  }
+};
+const updateProductTerms = async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const { selling_price, moq, moq_price } = req.body;
+
+    // 1. Basic payload validation
+    if (selling_price === undefined || selling_price === null) {
+      return res.status(400).json({
+        success: false,
+        message: "Selling price is required.",
+      });
+    }
+
+    // 2. Execute SQL Update query
+    const query = `
+      UPDATE products
+      SET 
+        selling_price = $1,
+        moq = $2,
+        moq_price = $3,
+        status = 'active',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+      RETURNING 
+        id, 
+        name, 
+        price, 
+        selling_price, 
+        moq, 
+        moq_price, 
+        status, 
+        updated_at;
+    `;
+
+    const values = [
+      selling_price,
+      moq !== undefined && moq !== "" ? moq : null,
+      moq_price !== undefined && moq_price !== "" ? moq_price : null,
+      productId,
+    ];
+
+    const result = await pool.query(query, values);
+
+    // 3. Handle product not found
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found.",
+      });
+    }
+
+    // 4. Return updated product data
+    res.status(200).json({
+      success: true,
+      message: "Product superadmin terms updated successfully.",
+      product: result.rows[0],
+    });
+  } catch (err) {
+    console.error("Update product terms error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error while updating product terms.",
+    });
   }
 };
 module.exports = {
@@ -1255,5 +1847,10 @@ module.exports = {
   getUnverifiedInfluencers,
   verifyinfluencer,
   getVerifiedInfluencers,
-  updateShowOnFrontend
+  updateShowOnFrontend,
+  getManufacturers,
+  getManufacturerById,
+  verifyManufacturer,
+  getManufacturerProducts,
+  updateProductTerms
 };

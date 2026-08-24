@@ -206,6 +206,146 @@ getAllCreators: async (req, res) => {
       return res.status(500).json({ message: "Server error" });
     }
   },
+   getVendor : async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { id } = req.params;
+
+    const vendorQuery = await client.query(
+      `
+      SELECT
+        v.*,
+
+        u.id as user_id,
+        u.name,
+        u.email,
+        u.phone,
+
+        COALESCE(
+          json_agg(
+            DISTINCT jsonb_build_object(
+              'id', s.id,
+              'name', s.name
+            )
+          ) FILTER (WHERE s.id IS NOT NULL),
+          '[]'
+        ) as services,
+
+        COALESCE(
+          json_agg(
+            DISTINCT jsonb_build_object(
+              'id', pc.id,
+              'name', pc.name
+            )
+          ) FILTER (WHERE pc.id IS NOT NULL),
+          '[]'
+        ) as categories
+
+      FROM vendors v
+
+      LEFT JOIN users u
+        ON u.id = v.user_id
+
+      LEFT JOIN vendor_services vs
+        ON vs.vendor_id = v.id
+
+      LEFT JOIN services s
+        ON s.id = vs.service_id
+
+      LEFT JOIN vendor_product_categories vpc
+        ON vpc.vendor_id = v.id
+
+      LEFT JOIN categories pc
+        ON pc.id = vpc.category_id
+
+      WHERE v.id = $1
+
+      GROUP BY
+        v.id,
+        u.id,
+        u.name,
+        u.email,
+        u.phone
+      `,
+      [id]
+    );
+
+    if (vendorQuery.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      vendor: vendorQuery.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Get vendor error:", err);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  } finally {
+    client.release();
+  }
+},
+ approveVendor: async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { id } = req.params;
+    const { is_verified } = req.body; // 👈 coming from frontend
+
+    if (typeof is_verified !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        message: "is_verified must be a boolean value",
+      });
+    }
+
+    const vendorResult = await client.query(
+      `
+      UPDATE vendors
+      SET
+        verified = $1,
+        updated_at = NOW()
+      WHERE id = $2
+      RETURNING *;
+      `,
+      [is_verified, id]
+    );
+
+    if (vendorResult.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: is_verified
+        ? "Vendor approved successfully"
+        : "Vendor unverified successfully",
+      vendor: vendorResult.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Approve vendor error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  } finally {
+    client.release();
+  }
+}
 };
+
+
 
 

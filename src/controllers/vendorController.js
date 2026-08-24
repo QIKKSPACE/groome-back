@@ -7,7 +7,8 @@ const emailService = require("../services/emailService");
 const jwt = require("jsonwebtoken");
 const { saveRefreshToken, getRefreshToken, deleteRefreshToken } = require("../models/tokenModel");
 const pool = require("../config/db");
-
+const path = require("path");
+const fs = require("fs");
 const VERIFICATION_EXP_MINUTES = 10;
 // controllers/authController.js
 
@@ -19,7 +20,7 @@ const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString()
 // -------------------- LOGIN FLOW --------------------
 async function login(req, res) {
   try {
-    const { phone, password } = req.body;
+    const { phone, password, } = req.body;
 
     if (!phone || !password) {
       return res.status(400).json({ message: "Phone and password required" });
@@ -50,10 +51,10 @@ async function login(req, res) {
     }
 
     const vendor = vendorRows[0];
-   console.log(vendor.verified)
+
     // 4️⃣ Check if vendor is verified
-    if (vendor.verified ) {
-      return res.status(403).json({ message: "Vendor not verified" });
+    if (!vendor.verified ) {
+      return res.status(403).json({ message: "Vendor not verified  please wait for verification to complete" });
     }
 
     // 5️⃣ Create tokens
@@ -69,7 +70,7 @@ async function login(req, res) {
       { expiresIn: "1y" }
     );
 
-    await saveRefreshToken(user.id, refreshToken);
+    await saveRefreshToken(user.id, refreshToken,"VENDOR");
 
     // 6️⃣ Send response with essential vendor info
     return res.json({
@@ -102,89 +103,135 @@ async function login(req, res) {
 // GET /vendors/webflow/:vendorId
 async function webflow(req, res) {
   const vendorId = req.user.vendorId;
-  const weeklyDays = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const weeklyDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   try {
-    console.log("Fetching vendor settings for vendorId:", vendorId);
+    const [
+      settingsResult,
+      closedResult,
+      holidayResult,
+      blockedSlotsResult,
+      extraResult,
+      servicesResult,
+      categoriesResult
+    ] = await Promise.all([
+      pool.query(
+        `SELECT * FROM vendor_settings WHERE vendor_id = $1`,
+        [vendorId]
+      ),
+      pool.query(
+        `SELECT id, day_date, reason
+         FROM closed_days
+         WHERE vendor_id = $1
+         ORDER BY day_date`,
+        [vendorId]
+      ),
+      pool.query(
+        `SELECT id, start_date, end_date, reason
+         FROM holiday_ranges
+         WHERE vendor_id = $1
+         ORDER BY start_date`,
+        [vendorId]
+      ),
+        pool.query(
+    `SELECT
+        id,
+        blocked_date,
+        start_time,
+        end_time,
+        reason
+     FROM blocked_slots
+     WHERE vendor_id = $1
+     ORDER BY blocked_date,start_time`,
+    [vendorId]
+  ),
+      pool.query(
+        `SELECT id, day_date, start_time, end_time
+         FROM overtimes
+         WHERE vendor_id = $1
+         ORDER BY day_date`,
+        [vendorId]
+      ),
+      
+      pool.query(`SELECT * FROM services ORDER BY id ASC`),
+      pool.query(`SELECT * FROM categories ORDER BY sort_order ASC`)
+    ]);
 
-    // 1️⃣ Vendor settings
-    const { rows: settingsRows } = await pool.query(
-      `SELECT * FROM vendor_settings WHERE vendor_id = $1`,
-      [vendorId]
-    );
-    const vendorSettingsDb = settingsRows[0] || null;
-    console.log("Raw vendorSettingsDb:", vendorSettingsDb);
+    const vendorSettingsDb = settingsResult.rows[0] || null;
 
     const vendorSettings = vendorSettingsDb
       ? {
-          businessHours: {
-            open: vendorSettingsDb.open_time,
-            close: vendorSettingsDb.close_time,
-            slotDuration: "30", // default since column is missing
-          },
+         businessHours: {
+  open: vendorSettingsDb.open_time,
+  close: vendorSettingsDb.close_time,
+  slotDuration: String(vendorSettingsDb.slot_duration ?? 30),
+},
           weeklyOffDays: (vendorSettingsDb.weekly_off_days || [])
             .map(d => weeklyDays[d])
-            .filter(Boolean), // remove invalid numbers
+            .filter(Boolean),
           employeeCount: vendorSettingsDb.employee_count || 1,
           autoGenerateSlots: vendorSettingsDb.auto_generate_slots ?? true,
           timezone: vendorSettingsDb.timezone || "UTC",
         }
       : null;
-    console.log("Mapped vendorSettings:", vendorSettings);
 
-    // 2️⃣ Closed Days
-    const { rows: closedRows } = await pool.query(
-      `SELECT id, day_date, reason FROM closed_days WHERE vendor_id = $1 ORDER BY day_date`,
-      [vendorId]
-    );
-    const closedDays = closedRows.map(c => ({
+    const closedDays = closedResult.rows.map(c => ({
       id: c.id,
-      day_date: c.day_date instanceof Date ? c.day_date.toISOString().split("T")[0] : c.day_date,
+      day_date:
+        c.day_date instanceof Date
+          ? c.day_date.toISOString().split("T")[0]
+          : c.day_date,
       reason: c.reason || "",
     }));
-    console.log("ClosedDays:", closedDays);
 
-    // 3️⃣ Holiday Ranges
-    const { rows: holidayRows } = await pool.query(
-      `SELECT id, start_date, end_date, reason FROM holiday_ranges WHERE vendor_id = $1 ORDER BY start_date`,
-      [vendorId]
-    );
-    const holidayRanges = holidayRows.map(h => ({
+    const holidayRanges = holidayResult.rows.map(h => ({
       id: h.id,
-      from: h.start_date instanceof Date ? h.start_date.toISOString().split("T")[0] : h.start_date,
-      to: h.end_date instanceof Date ? h.end_date.toISOString().split("T")[0] : h.end_date,
+      from:
+        h.start_date instanceof Date
+          ? h.start_date.toISOString().split("T")[0]
+          : h.start_date,
+      to:
+        h.end_date instanceof Date
+          ? h.end_date.toISOString().split("T")[0]
+          : h.end_date,
       reason: h.reason || "",
     }));
-    console.log("HolidayRanges:", holidayRanges);
 
-    // 4️⃣ Extra Hours / Overtime
-    const { rows: extraRows } = await pool.query(
-      `SELECT id, day_date, start_time, end_time FROM overtimes WHERE vendor_id = $1 ORDER BY day_date`,
-      [vendorId]
-    );
-    const extraHours = extraRows.map(e => ({
+    const extraHours = extraResult.rows.map(e => ({
       id: e.id,
-      date: e.day_date instanceof Date ? e.day_date.toISOString().split("T")[0] : e.day_date,
+      date:
+        e.day_date instanceof Date
+          ? e.day_date.toISOString().split("T")[0]
+          : e.day_date,
       start: e.start_time,
       end: e.end_time,
     }));
-    console.log("ExtraHours:", extraHours);
-
-    // 5️⃣ Return final response
-    console.log("Sending response...");
+const blockedTimings = blockedSlotsResult.rows.map(slot => ({
+  id: slot.id,
+  date:
+    slot.blocked_date instanceof Date
+      ? slot.blocked_date.toISOString().split("T")[0]
+      : slot.blocked_date,
+  start: slot.start_time,
+  end: slot.end_time,
+  reason: slot.reason || ""
+}));
     return res.json({
       vendorSettings,
       closedDays,
       holidayRanges,
       extraHours,
+        blockedTimings,
+      services: servicesResult.rows,
+      categories: categoriesResult.rows,
     });
-
   } catch (err) {
     console.error("Error fetching vendor webflow:", err);
-    return res.status(500).json({ message: "Failed to load vendor data" });
+    return res.status(500).json({
+      message: "Failed to load vendor data",
+    });
   }
 }
-
 
 async function saveVendorSettings(req, res) {
   const vendorId = req.user.vendorId;
@@ -198,15 +245,17 @@ async function saveVendorSettings(req, res) {
     // 1️⃣ Update vendor_settings
     if (vendorSettings) {
       const { businessHours, weeklyOffDays, employeeCount } = vendorSettings;
+      const slotDurationNum = Number(businessHours.slotDuration ?? 30);
       await client.query(
         `
-        INSERT INTO vendor_settings (vendor_id, open_time, close_time, weekly_off_days, employee_count)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO vendor_settings (vendor_id, open_time, close_time, weekly_off_days, employee_count,slot_duration, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, now())
         ON CONFLICT (vendor_id) DO UPDATE
         SET open_time = EXCLUDED.open_time,
             close_time = EXCLUDED.close_time,
             weekly_off_days = EXCLUDED.weekly_off_days,
             employee_count = EXCLUDED.employee_count,
+            slot_duration = EXCLUDED.slot_duration,
             updated_at = now()
         `,
         [
@@ -214,7 +263,8 @@ async function saveVendorSettings(req, res) {
           businessHours.open,
           businessHours.close,
           weeklyOffDays.map(d => ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].indexOf(d)), // convert to smallint[]
-          employeeCount
+          employeeCount,
+          slotDurationNum
         ]
       );
     }
@@ -377,6 +427,7 @@ const vendorId = req.user.vendorId; // extracted from JWT middleware
         discount_price,
         duration_minutes,
         status,
+        quality_tier
       } = req.body;
 
       if (!vendorId) {
@@ -388,8 +439,8 @@ const vendorId = req.user.vendorId; // extracted from JWT middleware
       // Insert into services_main
       const serviceQuery = `
         INSERT INTO services_main 
-        (vendor_id, category_id, name, description, price, discount_price, duration_minutes, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'active'))
+        (vendor_id, category_id, name, description, price, discount_price, duration_minutes, status,quality_tier)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'active'),$9)
         RETURNING *;
       `;
 
@@ -402,6 +453,7 @@ const vendorId = req.user.vendorId; // extracted from JWT middleware
         discount_price || null,
         duration_minutes || 60,
         status,
+        quality_tier
       ]);
 
       const service = serviceResult.rows[0];
@@ -502,11 +554,124 @@ async function deleteService(req, res) {
     client.release();
   }
 }
+async function updateService(req, res) {
+  const client = await pool.connect();
+
+  try {
+    const vendorId = req.user.vendorId;
+    const { serviceId } = req.params;
+
+    const {
+      name,
+      description,
+      category_id,
+      price,
+      discount_price,
+      duration_minutes,
+      status,
+    } = req.body;
+
+    await client.query("BEGIN");
+
+    // Verify service belongs to vendor
+    const serviceCheck = await client.query(
+      `
+      SELECT *
+      FROM services_main
+      WHERE id = $1 AND vendor_id = $2
+      `,
+      [serviceId, vendorId]
+    );
+
+    if (serviceCheck.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        error: "Service not found",
+      });
+    }
+
+    // Update service
+    const updateResult = await client.query(
+      `
+      UPDATE services_main
+      SET
+        category_id = $1,
+        name = $2,
+        description = $3,
+        price = $4,
+        discount_price = $5,
+        duration_minutes = $6,
+        status = $7,
+        updated_at = NOW()
+      WHERE id = $8
+      RETURNING *;
+      `,
+      [
+        category_id || null,
+        name,
+        description || null,
+        price,
+        discount_price || null,
+        duration_minutes || 60,
+        status || "active",
+        serviceId,
+      ]
+    );
+
+    const service = updateResult.rows[0];
+
+    // If new images uploaded
+    if (req.files && req.files.length > 0) {
+      // Delete old image records
+      await client.query(
+        `DELETE FROM service_images WHERE service_id = $1`,
+        [serviceId]
+      );
+
+      // Insert new images
+      for (let i = 0; i < req.files.length; i++) {
+        const file = req.files[i];
+
+        await client.query(
+          `
+          INSERT INTO service_images
+          (service_id, image_url, sort_order)
+          VALUES ($1, $2, $3)
+          `,
+          [
+            serviceId,
+            `/uploads/${file.filename}`,
+            i,
+          ]
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      success: true,
+      message: "Service updated successfully",
+      service,
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("Error updating service:", err);
+
+    return res.status(500).json({
+      error: "Server error updating service",
+    });
+  } finally {
+    client.release();
+  }
+}
 module.exports = {
   deleteService,
   createServices,
   getServices,
   saveVendorSettings,
+  updateService,
   login,
   webflow
 

@@ -1,4 +1,6 @@
 const express = require("express");
+const axios = require("axios");
+
 const {
   loginSuperadmin,
 
@@ -47,7 +49,13 @@ const {
   getUnverifiedInfluencers,
   verifyinfluencer,
   getVerifiedInfluencers,
-  updateShowOnFrontend
+  updateShowOnFrontend,
+
+getManufacturers,
+getManufacturerById,
+verifyManufacturer,
+getManufacturerProducts,
+updateProductTerms
 } = require("../controllers/superAdminController");
 
 const superadminAuth = require("../middlewares/superadminAuth");
@@ -65,6 +73,9 @@ const {
   createCreator,
   updateCreator,
   deleteCreator,
+  getVendor,
+  approveVendor
+
 
 } = require("../controllers/superAdminControllerOther");
 const pool = require("../config/db");
@@ -95,7 +106,12 @@ router.post("/banners", superadminAuth, upload.single("file"), createBanner); //
 router.put("/banners/:id", superadminAuth, upload.single("file"), updateBanner); // ✅ with file upload
 router.patch("/banners/:id/status", superadminAuth, toggleBannerStatus);
 router.delete("/banners/:id", superadminAuth, deleteBanner);
-   
+router.patch(
+  "/vendors/:id/approve",
+  superadminAuth,
+  approveVendor
+);
+router.get("/vendors/:id", getVendor);
 // ---------- Vendors ----------
 router.get("/vendors", getVendors);
 router.post(
@@ -146,7 +162,16 @@ router.delete("/creators/:id", deleteCreator);
 router.get("/influencers/getUnverifiedInfluencers", getUnverifiedInfluencers);
 router.post("/verifyInfluencer/:id", verifyinfluencer);
 router.get("/influencers/getVerifiedInfluencers", getVerifiedInfluencers);
+
 router.post("/showonfrontend", updateShowOnFrontend);
+router.get("/manufacturers", getManufacturers);
+router.get("/manufacturers/:id", getManufacturerById);
+router.patch('/manufacturers/:id',verifyManufacturer)
+router.get('/manufacturer/:userId',getManufacturerProducts)
+router.patch('/products/:productId', updateProductTerms);
+
+
+
 router.get("/influencers/:id/videos", async (req, res) => {
   try {
     const { id } = req.params; // influencer ID
@@ -172,10 +197,241 @@ router.get("/influencers/:id/videos", async (req, res) => {
     return res.status(500).json({ message: "Server error" });
   }
 });
+router.get("/pincode", async (req, res) => {
+  try {
+    const { lat, lng } = req.query;
 
+    // Validate latitude and longitude
+    if (!lat || !lng) {
+      return res.status(400).json({
+        success: false,
+        message: "Latitude and longitude are required.",
+      });
+    }
 
+    const latitude = Number(lat);
+    const longitude = Number(lng);
 
+    if (
+      Number.isNaN(latitude) ||
+      Number.isNaN(longitude) ||
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid latitude or longitude.",
+      });
+    }
 
+    const response = await axios.get(
+      "https://nominatim.openstreetmap.org/reverse",
+      {
+        params: {
+          lat: latitude,
+          lon: longitude,
+          format: "jsonv2",
+          addressdetails: 1,
+        },
+        headers: {
+          "User-Agent": "thegroome/1.0",
+        },
+        timeout: 10000,
+      }
+    );
+
+    const address = response.data?.address;
+
+    const pincode = address?.postcode;
+
+    if (!pincode) {
+      return res.status(404).json({
+        success: false,
+        message: "Pincode could not be found for this location.",
+      });
+    }
+   console.log("Reverse geocoding successful:", {
+      lat: latitude,
+      lng: longitude,
+      pincode,
+      address,
+    });
+    return res.json({
+      success: true,
+      pincode,
+      lat: latitude,
+      lng: longitude,
+      address,
+    });
+  } catch (error) {
+    console.error(
+      "Reverse geocoding error:",
+      error.response?.data || error.message
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to get pincode from coordinates.",
+    });
+  }
+});
+router.get("/campaigns", async (req, res) => {
+  let client;
+
+  try {
+    client = await pool.connect();
+
+    // Fetch All Ads with Aggregated Targeted Locations and Advertiser Details
+    const query = `
+      SELECT 
+        a.id,
+        a.title,
+        a.banner_url,
+        a.target_link,
+        a.position,
+        a.start_date,
+        a.end_date,
+        a.status,
+        a.created_at,
+        u.id AS advertiser_id,
+        u.name AS advertiser_name,
+        u.phone AS advertiser_phone,
+        u.email AS advertiser_email,
+        -- Aggregate non-null locations into arrays
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.pincode), NULL) AS pincodes,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.tehsil), NULL) AS tehsils,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.city), NULL) AS cities,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.state), NULL) AS states,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT l.country), NULL) AS countries
+      FROM advertisements a
+      LEFT JOIN users u ON u.id = a.advertiser_id -- Replace 'a.user_id' with 'a.advertiser_id' if your foreign key is named differently
+      LEFT JOIN advertisement_locations l ON a.id = l.advertisement_id
+      GROUP BY a.id, u.id, u.name, u.phone, u.email
+      ORDER BY a.created_at DESC;
+    `;
+
+    const { rows } = await client.query(query);
+
+    // Format Response Data
+    const campaigns = rows.map((campaign) => {
+      // Determine effective target scale automatically
+      let targetType = "country";
+      if (campaign.pincodes.length > 0) targetType = "pincode";
+      else if (campaign.tehsils.length > 0) targetType = "tehsil";
+      else if (campaign.cities.length > 0) targetType = "city";
+      else if (campaign.states.length > 0) targetType = "state";
+
+      return {
+        id: campaign.id,
+        title: campaign.title,
+        bannerUrl: campaign.banner_url,
+        targetLink: campaign.target_link,
+        position: campaign.position,
+        startDate: campaign.start_date,
+        endDate: campaign.end_date,
+        status: campaign.status,
+        createdAt: campaign.created_at,
+        advertiser: {
+          id: campaign.advertiser_id,
+          name: campaign.advertiser_name,
+          email: campaign.advertiser_email,
+          phone: campaign.advertiser_phone,
+        },
+        targetType,
+        locations: {
+          pincodes: campaign.pincodes,
+          tehsils: campaign.tehsils,
+          cities: campaign.cities,
+          states: campaign.states,
+          countries: campaign.countries,
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: campaigns.length,
+      data: campaigns,
+    });
+  } catch (error) {
+    console.error("Error fetching all campaigns:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Unable to retrieve campaigns.",
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// Express.js Route: Approve or Reject a Campaign
+router.post("/campaigns/status", async (req, res) => {
+  const { id, status } = req.body;
+
+  // 1. Validation
+  if (!id || !status) {
+    return res.status(400).json({
+      success: false,
+      message: "Both advertisement 'id' and 'status' are required.",
+    });
+  }
+
+  // Normalize status to uppercase
+  const normalizedStatus = status.trim().toUpperCase();
+  const validStatuses = ["APPROVED", "REJECTED", "PENDING"];
+
+  if (!validStatuses.includes(normalizedStatus)) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid status provided. Allowed values are: ${validStatuses.join(", ")}`,
+    });
+  }
+
+  let client;
+
+  try {
+    client = await pool.connect();
+
+    // 2. Execute Update Query
+    const updateQuery = `
+      UPDATE advertisements
+      SET status = $1
+       
+      WHERE id = $2
+      RETURNING id, title, status;
+    `;
+
+    const { rows, rowCount } = await client.query(updateQuery, [
+      normalizedStatus,
+      id,
+    ]);
+
+    // 3. Handle Not Found
+    if (rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: `Campaign with ID ${id} not found.`,
+      });
+    }
+
+    // 4. Return Success Response
+    return res.status(200).json({
+      success: true,
+      message: `Campaign status updated to '${normalizedStatus}' successfully.`,
+      data: rows[0],
+    });
+  } catch (error) {
+    console.error("Error updating campaign status:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error while updating campaign status.",
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
 //verifyInfluencer/:id
 
 module.exports = router;
