@@ -474,3 +474,45 @@ ADD COLUMN specifications JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE products
 ADD COLUMN moq INTEGER,
 ADD COLUMN moq_price NUMERIC(10,2);
+
+
+
+ALTER TABLE malls
+ADD COLUMN total_credits INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE malls
+ADD COLUMN profile_image TEXT;
+
+CREATE TABLE mall_products (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    mall_id UUID NOT NULL,
+    product_id UUID NOT NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_mall_products_mall
+        FOREIGN KEY (mall_id)
+        REFERENCES malls(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_mall_products_product
+        FOREIGN KEY (product_id)
+        REFERENCES products(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT unique_mall_product
+        UNIQUE (mall_id, product_id)
+);
+
+CREATE INDEX idx_mall_products_product_id
+ON mall_products(product_id);
+ALTER TABLE malls
+ADD COLUMN geo_location geography(Point, 4326),
+ADD COLUMN delivery_radius_km DOUBLE PRECISION;
+
+CREATE INDEX idx_malls_geo_location
+ON malls
+USING GIST (geo_location);
+ALTER TABLE mall_products
+ADD COLUMN selling_price NUMERIC(10,2) NOT NULL DEFAULT 0;

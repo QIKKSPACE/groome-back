@@ -13,16 +13,26 @@ const ctrl = require("../controllers/manufacturerController");
  router.post("/login", ctrl.login);
  router.get("/webflow",authorization, ctrl.webflow);
  router.get("/products",authorization, ctrl.getProducts);
- router.get("/products",authorization, ctrl.getProducts);
+
 router.put(
   "/products/:id",
   authorization,
-  upload.array("images", 10),
+  upload.fields([
+    { name: "images", maxCount: 10 },
+    { name: "brand_authorisation_letter", maxCount: 1 }
+  ]),
   ctrl.updateProduct
 );
 
- router.post("/products",authorization,
-     upload.array("images", 10), ctrl.createProduct);
+router.post(
+  "/products",
+  authorization,
+  upload.fields([
+    { name: "images", maxCount: 10 },
+    { name: "brand_authorisation_letter", maxCount: 1 }
+  ]),
+  ctrl.createProduct
+);
 router.delete("/products/:id",authorization, ctrl.deleteProduct);
 
 

@@ -137,8 +137,8 @@ async function calculateSlots(req, res) {
       const slotEnd = cursor.plus({ minutes: duration });
 
       // Check if slot overlaps with ANY blocked slot time frame
-      const isBlocked = blockedSlots.some(b => b.start < slotEnd && b.end > slotStart);
-
+      //const isBlocked = blockedSlots.some(b => b.start < slotEnd && b.end > slotStart);
+const isBlocked = blockedSlots.some(b => slotStart >= b.start && slotStart < b.end);
       let employeesUsed = 0;
       let isAvailable = true;
 

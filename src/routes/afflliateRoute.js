@@ -83,10 +83,7 @@ router.post("/assignAffiliate", async (req, res) => {
       throw new Error("User not found.");
     }
 
-    if (childResult.rows[0].parent_affiliate) {
-      throw new Error("User already has a parent affiliate.");
-    }
-
+  
     // Check parent user
     const parentResult = await client.query(
       `SELECT id, affiliate_count
@@ -133,4 +130,62 @@ router.post("/assignAffiliate", async (req, res) => {
   }
 });
 
+router.get("/getSubAffiliates", async (req, res) => {
+  const { parentId } = req.query;
+
+  if (!parentId) {
+    return res.status(400).json({
+      success: false,
+      message: "parentId query parameter is required.",
+    });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT
+         u.id,
+         u.name,
+         u.email,
+         u.phone,
+         u.affiliate_code,
+         u.parent_affiliate,
+         u.affiliate_count,
+
+         CASE
+           WHEN p.id IS NOT NULL THEN
+             json_build_object(
+               'id', p.id,
+               'name', p.name,
+               'email', p.email,
+               'phone', p.phone,
+               'affiliate_code', p.affiliate_code,
+               'affiliate_count', p.affiliate_count
+             )
+           ELSE NULL
+         END AS parent_user
+
+       FROM users u
+       LEFT JOIN users p
+         ON u.parent_affiliate = p.id
+
+       WHERE u.parent_affiliate = $1
+
+       ORDER BY u.affiliate_count DESC, u.name ASC;`,
+      [parentId]
+    );
+
+    res.json({
+      success: true,
+      parentId: parentId,
+      count: result.rows.length,
+      subAffiliates: result.rows,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch sub-affiliates.",
+    });
+  }
+});
 module.exports = router;

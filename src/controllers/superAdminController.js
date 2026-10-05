@@ -963,35 +963,7 @@ return res.status(500).json({
 };
 
 
-const getMalls = async (req, res) => {
-  try {
-    const query = `
-      SELECT 
-        m.id,
-        m.business_name AS name,
-        u.name AS manager_name,
-        u.email,
-        u.phone,
-        m.address,
-        m.pincode AS zip_code,
-        m.city,
-        m.state,
-        'India' AS country,
-        m.verified AS is_verified,
-        TRUE AS is_active,
-        m.created_at
-      FROM malls m
-      JOIN users u ON m.user_id = u.id
-      ORDER BY m.created_at DESC;
-    `;
 
-    const result = await pool.query(query);
-    res.json(result.rows);
-  } catch (err) {
-    console.error("Error fetching malls:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-};
 
 // ==========================
 // 📋 Get All Franchise Types
@@ -1468,66 +1440,125 @@ const getVerifiedInfluencers = async (req, res) => {
   }
   
 };
+
+
+
 const getManufacturers = async (req, res) => {
   try {
     const { search, filterStatus } = req.query;
 
     let query = `
-      SELECT 
-        m.id, 
-        m.business_name, 
-        m.address, 
-        m.zip_code, 
-        m.city, 
-        m.state, 
-        m.company_doc, 
-        m.company_id, 
-        m.verified,
-        u.name AS owner_name,
-        u.email,
-        u.phone,
-        m.user_id,
-        COALESCE(
-          ARRAY_AGG(DISTINCT c.name) 
-          FILTER (WHERE c.id IS NOT NULL), 
-          '{}'
-        ) AS categories,
-        COUNT(DISTINCT p.id) FILTER (
-          WHERE (p.selling_price IS NULL OR p.selling_price = 0)
-            AND p.seller_type = 'MANUFACTURER'
-        ) AS null_price_product_count
-      FROM manufacturers m
-      JOIN users u ON u.id = m.user_id
-      LEFT JOIN manufacturer_categories mc ON mc.manufacturer_id = m.id
-      LEFT JOIN categories c ON c.id = mc.category_id
-      LEFT JOIN products p ON p.user_id = m.user_id
-      WHERE 1=1
+      WITH base_manufacturers AS (
+        SELECT 
+          m.id,
+          m.business_name,
+          m.address,
+          m.zip_code,
+          m.city,
+          m.state,
+          m.company_doc,
+          m.company_id,
+          m.verified,
+
+          u.name AS owner_name,
+          u.email,
+          u.phone,
+          m.user_id,
+
+          COALESCE(
+            ARRAY_AGG(DISTINCT c.name)
+            FILTER (WHERE c.id IS NOT NULL),
+            '{}'
+          ) AS categories,
+
+          COUNT(DISTINCT p.id) FILTER (
+            WHERE (p.selling_price IS NULL OR p.selling_price = 0)
+              AND p.seller_type = 'MANUFACTURER'
+          ) AS null_price_product_count
+
+        FROM manufacturers m
+
+        JOIN users u
+          ON u.id = m.user_id
+
+        LEFT JOIN manufacturer_categories mc
+          ON mc.manufacturer_id = m.id
+
+        LEFT JOIN categories c
+          ON c.id = mc.category_id
+
+        LEFT JOIN products p
+          ON p.user_id = m.user_id
+
+        WHERE 1=1
     `;
 
     const values = [];
 
+    // Manufacturer verification filter
     if (filterStatus === "verified") {
       query += ` AND m.verified = true`;
     } else if (filterStatus === "unverified") {
       query += ` AND m.verified = false`;
     }
 
+    // Search
     if (search) {
       values.push(`%${search}%`);
-      query += ` AND (
-        m.business_name ILIKE $${values.length} OR
-        u.name ILIKE $${values.length} OR
-        u.email ILIKE $${values.length} OR
-        u.phone ILIKE $${values.length} OR
-        m.city ILIKE $${values.length} OR
-        m.state ILIKE $${values.length} OR
-        m.zip_code ILIKE $${values.length}
-      )`;
+
+      query += `
+        AND (
+          m.business_name ILIKE $${values.length}
+          OR u.name ILIKE $${values.length}
+          OR u.email ILIKE $${values.length}
+          OR u.phone ILIKE $${values.length}
+          OR m.city ILIKE $${values.length}
+          OR m.state ILIKE $${values.length}
+          OR m.zip_code ILIKE $${values.length}
+        )
+      `;
     }
 
     query += `
-      GROUP BY m.id, u.name, u.email, u.phone
-      ORDER BY m.verified DESC, m.business_name ASC;
+        GROUP BY
+          m.id,
+          u.name,
+          u.email,
+          u.phone
+      )
+      SELECT 
+        bm.*,
+        kyc_data.kyc
+      FROM base_manufacturers bm
+      LEFT JOIN LATERAL (
+        SELECT
+          json_build_object(
+            'id', k.id,
+            'account_holder_name', k.account_holder_name,
+            'account_number', k.account_number,
+            'ifsc', k.ifsc,
+             'status', k.status,
+            'pan_number', k.pan_number,
+            'pan_image_url', k.pan_image_url,
+            'document_type', k.document_type,
+            'document_front_url', k.document_front_url,
+            'document_back_url', k.document_back_url,
+            'rejection_reason', k.rejection_reason,
+            'verified_at', k.verified_at,
+            'verified_by', k.verified_by,
+            'created_at', k.created_at,
+            'updated_at', k.updated_at
+          ) AS kyc
+        FROM kyc k
+        WHERE k.user_id = bm.id
+          AND k.other_type = 'MANUFACTURER'
+        ORDER BY k.created_at DESC
+        LIMIT 1
+      ) kyc_data ON true
+
+      ORDER BY
+        bm.verified DESC,
+        bm.business_name ASC;
     `;
 
     const result = await pool.query(query, values);
@@ -1538,12 +1569,18 @@ const getManufacturers = async (req, res) => {
     });
   } catch (err) {
     console.error("Get manufacturers error:", err);
+
     res.status(500).json({
       success: false,
       message: "Server error",
     });
   }
 };
+
+
+
+
+
 
 const getManufacturerById = async (req, res) => {
   try {
@@ -1804,6 +1841,392 @@ const updateProductTerms = async (req, res) => {
     });
   }
 };
+const getMalls = async (req, res) => {
+  try {
+    const { search, filterStatus } = req.query;
+
+    let query = `
+      SELECT
+        m.id,
+        m.business_name,
+        m.address,
+        m.pincode,
+        m.city,
+        m.state,
+        m.company_doc,
+        m.company_id,
+        m.map_address,
+        m.place_id,
+        m.latitude,
+        m.longitude,
+        m.verified,
+        m.created_at,
+        m.updated_at,
+
+        u.name AS owner_name,
+        u.email,
+        u.phone,
+        m.user_id,
+
+        COALESCE(
+          ARRAY_AGG(DISTINCT c.name)
+          FILTER (WHERE c.id IS NOT NULL),
+          '{}'
+        ) AS categories
+
+      FROM malls m
+
+      JOIN users u
+        ON u.id = m.user_id
+
+      LEFT JOIN mall_product_categories mpc
+        ON mpc.mall_id = m.id
+
+      LEFT JOIN categories c
+        ON c.id = mpc.category_id
+
+      WHERE 1=1
+    `;
+
+    const values = [];
+
+    // ============================================
+    // FILTER BY VERIFICATION STATUS
+    // ============================================
+    if (filterStatus === "verified") {
+      query += ` AND m.verified = true`;
+    } else if (filterStatus === "unverified") {
+      query += ` AND m.verified = false`;
+    }
+
+    // ============================================
+    // SEARCH
+    // ============================================
+    if (search) {
+      values.push(`%${search}%`);
+
+      query += `
+        AND (
+          m.business_name ILIKE $${values.length}
+          OR u.name ILIKE $${values.length}
+          OR u.email ILIKE $${values.length}
+          OR u.phone ILIKE $${values.length}
+          OR m.city ILIKE $${values.length}
+          OR m.state ILIKE $${values.length}
+          OR m.pincode ILIKE $${values.length}
+          OR m.company_id ILIKE $${values.length}
+        )
+      `;
+    }
+
+    // ============================================
+    // GROUP + ORDER
+    // ============================================
+    query += `
+      GROUP BY
+        m.id,
+        u.name,
+        u.email,
+        u.phone
+
+      ORDER BY
+        m.verified DESC,
+        m.business_name ASC;
+    `;
+
+    const result = await pool.query(query, values);
+
+    return res.status(200).json({
+      success: true,
+      malls: result.rows,
+    });
+
+  } catch (err) {
+    console.error("Get malls error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+const getMallById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(
+      `
+      SELECT
+        m.*,
+
+        u.id AS user_id,
+        u.name AS owner_name,
+        u.email,
+        u.phone,
+
+        COALESCE(
+          ARRAY_AGG(DISTINCT c.name)
+          FILTER (WHERE c.id IS NOT NULL),
+          '{}'
+        ) AS categories
+
+      FROM malls m
+
+      JOIN users u
+        ON u.id = m.user_id
+
+      LEFT JOIN mall_product_categories mpc
+        ON mpc.mall_id = m.id
+
+      LEFT JOIN categories c
+        ON c.id = mpc.category_id
+
+      WHERE m.id = $1
+
+      GROUP BY
+        m.id,
+        u.id,
+        u.name,
+        u.email,
+        u.phone;
+      `,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Mall not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      mall: result.rows[0],
+    });
+
+  } catch (err) {
+    console.error("Get mall by ID error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+const verifyMall = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { verified } = req.body;
+
+    // Validate payload
+    if (typeof verified !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid payload. 'verified' must be a boolean (true or false).",
+      });
+    }
+
+    const result = await pool.query(
+      `
+      UPDATE malls m
+      SET
+        verified = $1,
+        updated_at = NOW()
+      FROM users u
+      WHERE m.id = $2
+        AND u.id = m.user_id
+      RETURNING
+        m.*,
+        u.id AS user_id,
+        u.name AS owner_name,
+        u.email,
+        u.phone,
+        COALESCE(
+          (
+            SELECT ARRAY_AGG(DISTINCT c.name)
+            FROM mall_product_categories mpc
+            JOIN categories c
+              ON c.id = mpc.category_id
+            WHERE mpc.mall_id = m.id
+          ),
+          '{}'
+        ) AS categories;
+      `,
+      [verified, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Mall not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Mall ${
+        verified ? "verified" : "unverified"
+      } successfully`,
+      mall: result.rows[0],
+    });
+  } catch (err) {
+    console.error("Verify mall error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+const updateCredit = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { mallId } = req.params;
+    const { amount } = req.body;
+
+    // =========================================================
+    // 1. BASIC VALIDATION
+    // =========================================================
+
+    if (!mallId) {
+      return res.status(400).json({
+        success: false,
+        message: "Mall ID is required",
+        statusCode: 400,
+      });
+    }
+
+    if (
+      amount === undefined ||
+      amount === null ||
+      typeof amount !== "number" ||
+      !Number.isFinite(amount)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid credit amount is required",
+        statusCode: 400,
+      });
+    }
+
+    if (amount === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Credit amount cannot be zero",
+        statusCode: 400,
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // =========================================================
+    // 2. GET MALL
+    // =========================================================
+
+    const mallResult = await client.query(
+      `
+      SELECT
+        id,
+        user_id,
+        total_credits
+      FROM malls
+      WHERE id = $1
+      FOR UPDATE
+      `,
+      [mallId]
+    );
+
+    if (mallResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        success: false,
+        message: "Mall not found",
+        statusCode: 404,
+      });
+    }
+
+    const mall = mallResult.rows[0];
+
+    // =========================================================
+    // 3. AUTHORIZATION
+    // =========================================================
+
+    
+
+    // =========================================================
+    // 4. CALCULATE NEW BALANCE
+    // =========================================================
+
+    const currentCredits = Number(mall.total_credits);
+    const newCredits = currentCredits + amount;
+
+    if (newCredits < 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient credits",
+        statusCode: 400,
+        currentCredits,
+        requestedChange: amount,
+      });
+    }
+
+    // =========================================================
+    // 5. UPDATE BALANCE
+    // =========================================================
+
+    const updateResult = await client.query(
+      `
+      UPDATE malls
+      SET
+        total_credits = $1,
+        updated_at = NOW()
+      WHERE id = $2
+      RETURNING
+        id,
+        total_credits,
+        updated_at
+      `,
+      [newCredits, mallId]
+    );
+
+    await client.query("COMMIT");
+
+    // =========================================================
+    // 6. RESPONSE
+    // =========================================================
+
+    return res.status(200).json({
+      success: true,
+      message: amount > 0
+        ? "Credits added successfully"
+        : "Credits deducted successfully",
+      statusCode: 200,
+      mall: updateResult.rows[0],
+    });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+
+    console.error("Update credit error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update credits",
+      statusCode: 500,
+    });
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   loginSuperadmin,
   getCategories,
@@ -1830,7 +2253,7 @@ module.exports = {
   verifyVendor,
   deleteVendor,
   lookupZip,
-  getMalls,
+  
   getFranchiseTypes,
   addFranchiseType,
   deleteFranchiseType,
@@ -1852,5 +2275,9 @@ module.exports = {
   getManufacturerById,
   verifyManufacturer,
   getManufacturerProducts,
-  updateProductTerms
+  updateProductTerms,
+  getMalls,
+  getMallById,
+  verifyMall,
+  updateCredit
 };

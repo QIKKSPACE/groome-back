@@ -32,7 +32,6 @@ const {
   verifyVendor,
   deleteVendor,
   lookupZip,
-  getMalls,
     addCity,
   deleteCity,
   getCities,
@@ -55,7 +54,12 @@ getManufacturers,
 getManufacturerById,
 verifyManufacturer,
 getManufacturerProducts,
-updateProductTerms
+updateProductTerms,
+getMallById,
+  getMalls,
+  verifyMall,
+  updateCredit,
+
 } = require("../controllers/superAdminController");
 
 const superadminAuth = require("../middlewares/superadminAuth");
@@ -125,7 +129,7 @@ router.post(
 router.put("/vendors/:id", updateVendor);
 router.patch("/vendors/:id/verify", verifyVendor);
 router.delete("/vendors/:id", deleteVendor);
-router.get("/malls", getMalls);
+
 
 router.post("/city", addCity);
 router.get("/city", getCities);
@@ -169,6 +173,15 @@ router.get("/manufacturers/:id", getManufacturerById);
 router.patch('/manufacturers/:id',verifyManufacturer)
 router.get('/manufacturer/:userId',getManufacturerProducts)
 router.patch('/products/:productId', updateProductTerms);
+router.get("/malls", getMalls);
+router.get("/malls/:id", getMallById);
+router.patch('/malls/:id',verifyMall)
+router.patch(
+  "/malls/:mallId/credits",
+ 
+  updateCredit
+);
+
 
 
 
@@ -433,5 +446,94 @@ router.post("/campaigns/status", async (req, res) => {
   }
 });
 //verifyInfluencer/:id
+router.post("/kyc/accept/:user_id", async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    const result = await pool.query(
+      `
+      UPDATE kyc
+      SET
+        status = 'VERIFIED',
+        rejection_reason = NULL,
+        verified_at = NOW(),
+        updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING *;
+      `,
+      [user_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "KYC not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "KYC accepted successfully",
+      kyc: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Accept KYC error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to accept KYC",
+    });
+  }
+});
+
+
+// REJECT KYC
+router.post("/kyc/reject/:user_id", async (req, res) => {
+  try {
+    const { user_id } = req.params;
+    const { rejection_reason } = req.body;
+
+    if (!rejection_reason) {
+      return res.status(400).json({
+        success: false,
+        message: "Rejection reason is required",
+      });
+    }
+
+    const result = await pool.query(
+      `
+      UPDATE kyc
+      SET
+        status = 'REJECTED',
+        rejection_reason = $2,
+        verified_at = NULL,
+        updated_at = NOW()
+      WHERE user_id = $1
+      RETURNING *;
+      `,
+      [user_id, rejection_reason]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "KYC not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "KYC rejected successfully",
+      kyc: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Reject KYC error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to reject KYC",
+    });
+  }
+});
 
 module.exports = router;

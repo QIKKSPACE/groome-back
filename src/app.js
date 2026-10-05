@@ -22,6 +22,10 @@ const locationRoutes = require("./routes/locationRoute.js");
 const advertismentRoutes = require("./routes/advertismentRoute.js");
 
 const campaignRoutes = require("./routes/campaigns.js");
+const mallRoutes = require("./routes/mallRoute.js");
+const kycRoutes = require("./routes/kycRoutes.js");
+
+
 
 
 
@@ -49,6 +53,10 @@ app.use("/affiliate", affiliateRoutes);
 app.use("/location", locationRoutes);
 app.use("/adv-pricing", advertismentRoutes);
 app.use("/campaigns", campaignRoutes);
+app.use("/mall", mallRoutes);
+app.use("/kyc", kycRoutes);
+
+
 
 
 
